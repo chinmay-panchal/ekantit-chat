@@ -20,9 +20,9 @@ load_dotenv(BASE_DIR / ".env")
 
 # Models
 EMBED_MODEL = "gemini-embedding-2"
-CHAT_MODEL = "gemini-3.1-flash-lite"
-FALLBACK_MODELS = ["gemini-2.5-flash-lite"]
-REWRITE_MODEL = "gemini-3.1-flash-lite"
+CHAT_MODEL = "gemini-2.5-flash-lite"
+FALLBACK_MODELS = ["gemini-3.1-flash-lite"]
+REWRITE_MODEL = "gemini-2.5-flash-lite"
 
 # Files
 TRANSCRIPTS_FILE = BASE_DIR / "transcripts.jsonl"
@@ -33,7 +33,7 @@ CACHE_META_FILE = BASE_DIR / "metadata.json.gz"
 SKIPPED_TURNS_LOG = BASE_DIR / "skipped_turns.log"
 
 # Configuration
-TOP_K = 6
+TOP_K = 3
 MAX_HISTORY_MESSAGES = 20
 
 QUERY_REWRITE_PROMPT = """Given the conversation history and a follow-up question from a user seeking spiritual guidance, determine if the question depends on the conversation context.
@@ -423,6 +423,23 @@ def retrieve_top_k(client, query: str, cached_pairs: list, k: int = TOP_K):
         label="embed query",
     ).embeddings[0].values
 
+    # Ultra-fast vectorized similarity if numpy vectors are present
+    try:
+        import numpy as np
+        if cached_pairs and isinstance(cached_pairs[0].get("embedding"), np.ndarray):
+            q_vec = np.array(query_embedding, dtype=np.float32)
+            q_norm = np.linalg.norm(q_vec)
+            if q_norm > 0:
+                q_vec /= q_norm
+            vectors = np.array([p["embedding"] for p in cached_pairs], dtype=np.float32)
+            v_norms = np.linalg.norm(vectors, axis=1, keepdims=True)
+            vectors_norm = vectors / np.maximum(v_norms, 1e-9)
+            scores = np.dot(vectors_norm, q_vec)
+            top_indices = np.argsort(scores)[::-1][:k]
+            return [(float(scores[idx]), cached_pairs[idx]) for idx in top_indices]
+    except Exception as e:
+        pass
+
     scored = []
     for pair in cached_pairs:
         score = cosine_similarity(query_embedding, pair["embedding"])
@@ -442,8 +459,16 @@ def answer_conversational(client, query: str, history: list = None, cached_pairs
     if not clean_query:
         raise ValueError("Query cannot be empty.")
 
-    # Step 1: Query rewriting
-    standalone_query = rewrite_query(client, clean_query, history)
+    # Step 1: Query rewriting (only when meaningful conversation history exists)
+    has_prior_history = any(
+        (m.get("content") or "").strip()
+        for m in (history or [])
+        if (m.get("content") or "").strip() != clean_query
+    )
+    if has_prior_history:
+        standalone_query = rewrite_query(client, clean_query, history)
+    else:
+        standalone_query = clean_query
 
     # Step 2: Retrieval using standalone query
     matches = retrieve_top_k(client, standalone_query, cached_pairs or [], k=k)
