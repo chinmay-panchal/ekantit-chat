@@ -1,0 +1,26 @@
+# Local Backups
+backup-premanand/
+
+# Python Virtual Environments & Cache
+**/.venv/
+**/venv/
+**/__pycache__/
+**/*.pyc
+**/.env
+
+# Audio & Heavy Raw Files (kept safe locally)
+**/*.wav
+**/*.mp3
+**/transcripts*.jsonl
+**/embeddings_cache.jsonl
+**/embeddings_cache.json
+**/reference.wav
+**/test_clip*.wav
+**/skipped_turns.log
+
+# Flutter Build Artifacts
+**/build/
+**/.dart_tool/
+**/.idea/
+**/*.iml
+.DS_Store
