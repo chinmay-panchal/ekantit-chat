@@ -1,1 +1,39 @@
-{"hosting":{"public":"build/web","ignore":["firebase.json","**/.*","**/node_modules/**"],"rewrites":[{"source":"**","destination":"/index.html"}],"headers":[{"source":"**","headers":[{"key":"Cache-Control","value":"no-cache, no-store, must-revalidate"}]},{"source":"**/*.@(js|css|wasm|png|jpg|jpeg|gif|ico|svg|woff|woff2)","headers":[{"key":"Cache-Control","value":"max-age=31536000"}]}]},"flutter":{"platforms":{"dart":{"lib/firebase_options.dart":{"projectId":"ekantit-chat","configurations":{"web":"1:23297981884:web:1cda50fc6f49c60241bfb9"}}}}}}
+{
+  "hosting": {
+    "public": "build/web",
+    "ignore": [
+      "firebase.json",
+      "**/.*",
+      "**/node_modules/**"
+    ],
+    "rewrites": [
+      {
+        "source": "**",
+        "destination": "/index.html"
+      }
+    ],
+    "headers": [
+      {
+        "source": "**",
+        "headers": [
+          {
+            "key": "Cache-Control",
+            "value": "no-cache, no-store, must-revalidate"
+          }
+        ]
+      }
+    ]
+  },
+  "flutter": {
+    "platforms": {
+      "dart": {
+        "lib/firebase_options.dart": {
+          "projectId": "ekantit-chat",
+          "configurations": {
+            "web": "1:23297981884:web:1cda50fc6f49c60241bfb9"
+          }
+        }
+      }
+    }
+  }
+}
