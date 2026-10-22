@@ -133,10 +133,10 @@ class ChatResponse {
 /// Service handling API communication with the RAG FastAPI backend.
 class ChatService {
   /// Base URL for the backend.
-  /// - Use 'http://localhost:8000' for local macOS / desktop / iOS simulator.
+  /// - Use 'https://ekantit-chat.onrender.com' for local macOS / desktop / iOS simulator.
   /// - Use 'http://10.0.2.2:8000' for standard Android emulator.
   /// - Use `http://<LAN-IP>:8000` for physical mobile devices on the same Wi-Fi.
-  static const String defaultBaseUrl = 'http://localhost:8000';
+  static const String defaultBaseUrl = 'https://ekantit-chat.onrender.com';
 
   final String baseUrl;
   final http.Client _client;
@@ -210,7 +210,7 @@ class ChatService {
       }
     } on SocketException catch (_) {
       throw const SocketException(
-        'Could not reach server. Please ensure the backend is running at http://localhost:8000 (or your LAN IP on physical devices).',
+        'Could not reach server. Please ensure the backend is running at https://ekantit-chat.onrender.com (or your LAN IP on physical devices).',
       );
     } on TimeoutException {
       throw TimeoutException('Request timed out after ${timeout.inSeconds} seconds. Please try again.');
