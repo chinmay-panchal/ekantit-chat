@@ -13,16 +13,17 @@ import time
 from pathlib import Path
 from dotenv import load_dotenv
 from google import genai
-from google.genai import errors
+from google.genai import errors, types
 
 BASE_DIR = Path(__file__).parent.resolve()
 load_dotenv(BASE_DIR / ".env")
 
 # Models
 EMBED_MODEL = "gemini-embedding-2"
-CHAT_MODEL = "gemini-2.5-flash-lite"
-FALLBACK_MODELS = ["gemini-3.1-flash-lite"]
-REWRITE_MODEL = "gemini-2.5-flash-lite"
+CHAT_MODEL = "gemini-3.5-flash-lite"
+FALLBACK_MODELS = ["gemini-3.1-flash-lite", "gemini-2.5-flash-lite"]
+REWRITE_MODEL = "gemini-3.5-flash-lite"
+REWRITE_FALLBACK_MODELS = ["gemini-3.1-flash-lite", "gemini-2.5-flash-lite"]
 
 # Files
 TRANSCRIPTS_FILE = BASE_DIR / "transcripts.jsonl"
@@ -36,21 +37,30 @@ SKIPPED_TURNS_LOG = BASE_DIR / "skipped_turns.log"
 TOP_K = 3
 MAX_HISTORY_MESSAGES = 20
 
-QUERY_REWRITE_PROMPT = """Given the conversation history and a follow-up question from a user seeking spiritual guidance, determine if the question depends on the conversation context.
-- If it is a follow-up referring to previous topics, concepts, or pronouns (e.g. 'why is it important?', 'how can I overcome it?', 'aur bataiye', 'isse kaise bachein?'), rewrite it into a single, complete, standalone question that preserves the specific spiritual topic and context from the conversation.
-- If the question is already independent and standalone (e.g. 'What is meditation?', 'Naam jap kaise karein?'), output the question as-is without altering its meaning.
-- Do NOT answer the question.
-- Do NOT add explanations or preamble.
-- Output ONLY the standalone question in plain text.
+QUERY_ANALYSIS_PROMPT = """You are an expert conversation analyzer for a spiritual Q&A system based on teachings of Premanand Ji Maharaj.
+Analyze the user's latest question in relation to the conversation history.
+
+Determine whether the latest question is:
+1. A FOLLOW-UP (is_follow_up = true): The user is continuing, clarifying, or asking about the previous topic, using pronouns, elisions, or references (e.g. 'which is best?', 'how to do it?', 'aur bataiye', 'iska kya fayda hai?', 'why?').
+2. A NEW TOPIC / INDEPENDENT QUESTION (is_follow_up = false): The user is asking a completely new, distinct question or request that does NOT depend on the previous conversation (e.g. asking for a shlok after discussing naam-jap techniques, asking about anger, guru, karma, family, or a new spiritual concept), even if it is within the same chat session.
+
+Important Rules:
+- If the question is an independent new topic, DO NOT inject or drag topics from the previous conversation into it. Keep the standalone question true to the user's new question.
+- If the question is a follow-up, rewrite it into a single, complete standalone question that resolves all pronouns/references using explicit terms from the conversation.
+- Output a JSON object with EXACTLY these two keys:
+  - "is_follow_up": boolean (true if it depends on previous messages, false if it is a new independent topic)
+  - "standalone_query": string
 
 Conversation History:
 {history}
 
-Follow-up Question: {query}
-Standalone Question:"""
+Latest Question: {query}
+"""
+QUERY_REWRITE_PROMPT = QUERY_ANALYSIS_PROMPT
 
-SYSTEM_PROMPT = """You are helping someone by drawing on the teachings of
-Premanand Ji Maharaj, based ONLY on the Q&A excerpts provided below from
+SYSTEM_PROMPT = (
+    """You are helping someone by drawing on the teachings of
+Premanand Ji Maharaj, based on the Q&A excerpts provided below from
 his actual satsang sessions.
 
 Read the person's situation/question, then look at the excerpts — even
@@ -66,24 +76,26 @@ NOT Devanagari) — e.g. "Radhe-Radhe, dekho beta..." instead of
 excerpts, just transliterate to Roman script. Do not invent facts about
 Premanand Ji himself. Ground your answer in the principles shown in the
 excerpts, adapted to the new situation.
-
-Strict grounding rules:
-- Quote a shloka, verse, scripture name or story ONLY if it appears in
-  the excerpts above. Never add quotes from your own memory.
-- Do not say things like "mere gurudev ne kaha" or "maine pichle satsang
-  me bataya" unless the excerpts actually say that.
-- If the excerpts don't cover the question well, say that briefly and
-  give only the general principles that do appear in them.
-
+"""
+    # Strict grounding rules:
+    # - Quote a shloka, verse, scripture name or story ONLY if it appears in
+    #   the excerpts above. Never add quotes from your own memory.
+    # - Do not say things like "mere gurudev ne kaha" or "maine pichle satsang
+    #   me bataya" unless the excerpts actually say that.
+    # - If the excerpts don't cover the question well, say that briefly and
+    #   give only the general principles that do appear in them.
+    """
 Excerpts:
 {context}
 
 Person's situation/question:
 {query}
 """
+)
 
-CONVERSATIONAL_SYSTEM_PROMPT = """You are helping someone by drawing on the teachings of
-Premanand Ji Maharaj, based ONLY on the Q&A excerpts provided below from
+CONVERSATIONAL_SYSTEM_PROMPT = (
+    """You are helping someone by drawing on the teachings of
+Premanand Ji Maharaj, based on the Q&A excerpts provided below from
 his actual satsang sessions.
 
 Read the person's situation/question and recent conversation history, then look at the excerpts — even
@@ -99,15 +111,15 @@ NOT Devanagari) — e.g. "Radhe-Radhe, dekho beta..." instead of
 excerpts, just transliterate to Roman script. Do not invent facts about
 Premanand Ji himself. Ground your answer in the principles shown in the
 excerpts, adapted to the new situation.
-
-Strict grounding rules:
-- Quote a shloka, verse, scripture name or story ONLY if it appears in
-  the excerpts above. Never add quotes from your own memory.
-- Do not say things like "mere gurudev ne kaha" or "maine pichle satsang
-  me bataya" unless the excerpts actually say that.
-- If the excerpts don't cover the question well, say that briefly and
-  give only the general principles that do appear in them.
-
+"""
+    # Strict grounding rules:
+    # - Quote a shloka, verse, scripture name or story ONLY if it appears in
+    #   the excerpts above. Never add quotes from your own memory.
+    # - Do not say things like "mere gurudev ne kaha" or "maine pichle satsang
+    #   me bataya" unless the excerpts actually say that.
+    # - If the excerpts don't cover the question well, say that briefly and
+    #   give only the general principles that do appear in them.
+    """
 Excerpts:
 {context}
 
@@ -116,6 +128,7 @@ Excerpts:
 Current Question:
 {query}
 """
+)
 
 
 def cosine_similarity(a, b):
@@ -365,14 +378,19 @@ def load_or_build_cache(client, pairs=None, embed_missing=False):
     return cached
 
 
-def rewrite_query(client, query: str, history: list = None) -> str:
-    """Stage 1: Resolve the user's question using conversation context into a standalone retrieval query."""
+def analyze_and_rewrite_query(client, query: str, history: list = None) -> tuple[str, bool]:
+    """Stage 1: Analyze user question against conversation context.
+    Returns:
+        (standalone_query, is_follow_up)
+        - If follow-up: resolves references/pronouns into an explicit standalone query, is_follow_up=True
+        - If new topic: preserves question as-is without contaminating with prior topics, is_follow_up=False
+    """
     clean_query = (query or "").strip()
     if not clean_query:
-        return ""
+        return "", False
 
     if not history:
-        return clean_query
+        return clean_query, False
 
     # Take recent history messages up to limit
     trimmed_history = history[-MAX_HISTORY_MESSAGES:]
@@ -384,33 +402,47 @@ def rewrite_query(client, query: str, history: list = None) -> str:
             formatted_lines.append(f"{role}: {content}")
 
     if not formatted_lines:
-        return clean_query
+        return clean_query, False
 
     formatted_history = "\n".join(formatted_lines)
-    prompt = QUERY_REWRITE_PROMPT.format(
-        history=formatted_history, query=clean_query)
+    prompt = QUERY_ANALYSIS_PROMPT.format(
+        history=formatted_history, query=clean_query
+    )
 
-    try:
-        response = with_retry(
-            lambda: client.models.generate_content(
-                model=REWRITE_MODEL,
-                contents=[prompt],
-            ),
-            label="query_rewrite",
-            max_retries=2,
-            base_wait=2,
-        )
-        rewritten = (response.text or "").strip()
-        # Clean up any potential quotation marks around the output
-        if rewritten.startswith('"') and rewritten.endswith('"'):
-            rewritten = rewritten[1:-1].strip()
-        if rewritten:
-            return rewritten
-    except Exception as e:
-        print(
-            f"[rewrite_query warning] Failed to rewrite query ({type(e).__name__}: {e}). Using original query.")
+    models_to_try = [REWRITE_MODEL] + REWRITE_FALLBACK_MODELS
+    for model in models_to_try:
+        try:
+            cfg = types.GenerateContentConfig(
+                response_mime_type="application/json",
+                temperature=0.0,
+            )
+            response = with_retry(
+                lambda m=model: client.models.generate_content(
+                    model=m,
+                    contents=[prompt],
+                    config=cfg,
+                ),
+                label=f"query_analysis_{model}",
+                max_retries=2,
+                base_wait=2,
+            )
+            raw_text = (response.text or "").strip()
+            data = json.loads(raw_text)
+            is_follow_up = bool(data.get("is_follow_up", False))
+            standalone_query = (data.get("standalone_query") or "").strip()
+            if not standalone_query:
+                standalone_query = clean_query
+            return standalone_query, is_follow_up
+        except Exception as e:
+            continue
 
-    return clean_query
+    return clean_query, False
+
+
+def rewrite_query(client, query: str, history: list = None) -> str:
+    """Stage 1 backwards compatibility: returns standalone query string."""
+    standalone_query, _ = analyze_and_rewrite_query(client, query, history)
+    return standalone_query
 
 
 def retrieve_top_k(client, query: str, cached_pairs: list, k: int = TOP_K):
@@ -450,25 +482,27 @@ def retrieve_top_k(client, query: str, cached_pairs: list, k: int = TOP_K):
 
 
 def answer_conversational(client, query: str, history: list = None, cached_pairs: list = None, k: int = TOP_K) -> dict:
-    """Full conversational RAG pipeline:
-    1. Resolve question into standalone query using conversation history.
+    """Full conversational RAG pipeline with smart topic-shift awareness:
+    1. Resolve question and detect whether it is a follow-up or brand new topic.
     2. Retrieve top-k relevant excerpts from Q&A dataset.
-    3. Generate final Hinglish answer using context + conversation history + original query.
+    3. If follow-up: feed recent conversation history to maintain continuity.
+       If new topic: do NOT pass prior conversation history, keeping context clean and unbiased.
     """
     clean_query = (query or "").strip()
     if not clean_query:
         raise ValueError("Query cannot be empty.")
 
-    # Step 1: Query rewriting (only when meaningful conversation history exists)
+    # Step 1: Query analysis & rewriting
     has_prior_history = any(
         (m.get("content") or "").strip()
         for m in (history or [])
         if (m.get("content") or "").strip() != clean_query
     )
     if has_prior_history:
-        standalone_query = rewrite_query(client, clean_query, history)
+        standalone_query, is_follow_up = analyze_and_rewrite_query(client, clean_query, history)
     else:
         standalone_query = clean_query
+        is_follow_up = False
 
     # Step 2: Retrieval using standalone query
     matches = retrieve_top_k(client, standalone_query, cached_pairs or [], k=k)
@@ -482,9 +516,8 @@ def answer_conversational(client, query: str, history: list = None, cached_pairs
             "score": round(score, 4),
         })
 
-    # Step 3: Format conversation history for final answer generation
-    history_section = ""
-    if history:
+    # Step 3: Conditional history injection
+    if is_follow_up and history:
         trimmed_history = history[-MAX_HISTORY_MESSAGES:]
         lines = []
         for msg in trimmed_history:
@@ -492,15 +525,18 @@ def answer_conversational(client, query: str, history: list = None, cached_pairs
             content = (msg.get("content") or "").strip()
             if content:
                 lines.append(f"{role}: {content}")
-        if lines:
-            history_section = "Recent Conversation History:\n" + \
-                "\n".join(lines)
-
-    prompt = CONVERSATIONAL_SYSTEM_PROMPT.format(
-        context="\n\n".join(context_blocks),
-        history_section=history_section,
-        query=clean_query,
-    )
+        history_section = "Recent Conversation History:\n" + "\n".join(lines) if lines else ""
+        prompt = CONVERSATIONAL_SYSTEM_PROMPT.format(
+            context="\n\n".join(context_blocks),
+            history_section=history_section,
+            query=clean_query,
+        )
+    else:
+        # Clean break / new topic: do NOT pollute prompt with unrelated past conversation
+        prompt = SYSTEM_PROMPT.format(
+            context="\n\n".join(context_blocks),
+            query=clean_query,
+        )
 
     answer = generate_answer(client, prompt)
 
@@ -508,4 +544,5 @@ def answer_conversational(client, query: str, history: list = None, cached_pairs
         "answer": answer,
         "matched_episodes": matched_episodes,
         "standalone_query": standalone_query,
+        "is_follow_up": is_follow_up,
     }

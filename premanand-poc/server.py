@@ -87,6 +87,7 @@ class ChatResponse(BaseModel):
     answer: str
     matched_episodes: List[MatchedEpisode]
     standalone_query: Optional[str] = None
+    is_follow_up: Optional[bool] = None
 
 
 class AskRequest(BaseModel):
@@ -139,6 +140,7 @@ def chat(req: ChatRequest):
         answer=answer,
         matched_episodes=[MatchedEpisode(**ep) for ep in result.get("matched_episodes", [])],
         standalone_query=result.get("standalone_query"),
+        is_follow_up=result.get("is_follow_up"),
     )
 
 

@@ -87,39 +87,37 @@ This document explains the full architecture, cloud infrastructure, and step-by-
 
 ---
 
-### C. Backend Deployment (Hugging Face Spaces)
+### C. Backend Deployment (Render)
 
 1. **Files Prepared in `premanand-poc`:**
-   - `Dockerfile`: Configured with Python 3.11-slim, exposing port `7860`.
+   - `Dockerfile`: Configured with Python 3.11-slim, exposing port `${PORT:-7860}`.
    - `requirements.txt`: Minimal dependencies (`fastapi`, `uvicorn`, `google-genai`, `python-dotenv`).
    - `embeddings_cache.jsonl`: 478 MB vector cache (10,308 Q&A pairs).
    - `server.py` & `rag.py`: Conversational RAG pipeline.
-   - `deploy_hf.py`: One-command automated uploader.
 
-2. **To Deploy to Hugging Face:**
+2. **To Deploy to Render:**
+   - Render is connected to the GitHub repository on branch `main`.
+   - Simply push commits to GitHub:
    ```bash
-   cd /Users/shadowwolf/premanand-poc
-   source .venv/bin/activate
-
-   # Run automated deploy script:
-   python deploy_hf.py <your-hf-username>/ekantit-backend
+   git add premanand-poc/rag.py premanand-poc/server.py
+   git commit -m "chore: update RAG prompt rules"
+   git push origin main
+   ```
+   Render automatically detects changes, rebuilds, and redeploys to:
+   ```
+   https://ekantit-chat.onrender.com
    ```
 
-3. **Configure API Key in Hugging Face:**
-   - In your Space on [huggingface.co](https://huggingface.co):
-   - Go to **Settings** → **Variables and secrets**.
-   - Click **New secret**:
+3. **Configure API Key in Render:**
+   - In Render Dashboard → Your Web Service → **Environment Variables**:
      - Key: `GEMINI_API_KEY`
      - Value: `<YOUR_GEMINI_API_KEY>`
 
 4. **Connect Frontend to Backend:**
-   Once your Hugging Face Space finishes building, it provides an HTTPS URL:
+   The frontend is configured with the Render endpoint as its default:
    ```
-   https://<username>-ekantit-backend.hf.space
+   https://ekantit-chat.onrender.com
    ```
-   - Open [https://ekantit-chat.web.app](https://ekantit-chat.web.app).
-   - Click **Backend URL** in the top right header.
-   - Paste the Hugging Face URL and click **Save**.
 
 ---
 
