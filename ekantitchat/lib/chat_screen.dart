@@ -221,22 +221,33 @@ class _ChatScreenState extends State<ChatScreen> {
         _scrollToBottom();
         await _persistCurrentSession();
       }
-    } on TimeoutException catch (e) {
+    } on ApiException catch (e) {
       if (mounted) {
         setState(() {
           _messages.add(ChatMessage.assistant(
-            e.message ?? 'Request timed out after 90 seconds. Please try again.',
+            e.userMessage,
             isError: true,
           ));
           _isLoading = false;
         });
         _scrollToBottom();
       }
-    } on SocketException catch (e) {
+    } on TimeoutException {
       if (mounted) {
         setState(() {
           _messages.add(ChatMessage.assistant(
-            e.message,
+            'Jawab aane me samay lag raha hai. Kripya punah prayas karein.',
+            isError: true,
+          ));
+          _isLoading = false;
+        });
+        _scrollToBottom();
+      }
+    } on SocketException {
+      if (mounted) {
+        setState(() {
+          _messages.add(ChatMessage.assistant(
+            'Internet connection check karein ya kripya thodi der baad prayas karein.',
             isError: true,
           ));
           _isLoading = false;
@@ -245,12 +256,10 @@ class _ChatScreenState extends State<ChatScreen> {
       }
     } catch (e) {
       if (mounted) {
-        final errorText = e.toString()
-            .replaceAll('Exception: ', '')
-            .replaceAll('HttpException: ', '');
+        debugPrint('[ChatScreen Uncaught Exception] $e');
         setState(() {
           _messages.add(ChatMessage.assistant(
-            errorText.isEmpty ? 'Unexpected error occurred. Please try again.' : errorText,
+            'Kuch asuvidha hui. Kripya internet check karein aur thodi der baad prayas karein.',
             isError: true,
           ));
           _isLoading = false;
@@ -839,37 +848,41 @@ class _ChatScreenState extends State<ChatScreen> {
 
 
   Widget _buildMessageBubble(ChatMessage message) {
+    final isCopied = _copiedMessageContent == message.text;
+
     if (message.isUser) {
       return Align(
         alignment: Alignment.centerRight,
-        child: Container(
-          margin: const EdgeInsets.only(bottom: 14, left: 56),
-          padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 13),
-          decoration: BoxDecoration(
-            color: AppColors.userBubble,
-            borderRadius: BorderRadius.circular(18),
-            border: Border.all(color: AppColors.border, width: 1),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withValues(alpha: 0.02),
-                blurRadius: 6,
-                offset: const Offset(0, 2),
+        child: GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onDoubleTap: () => _copyToClipboard(message.text),
+          child: Container(
+            margin: const EdgeInsets.only(bottom: 14, left: 56),
+            padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 13),
+            decoration: BoxDecoration(
+              color: AppColors.userBubble,
+              borderRadius: BorderRadius.circular(18),
+              border: Border.all(color: AppColors.border, width: 1),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withValues(alpha: 0.02),
+                  blurRadius: 6,
+                  offset: const Offset(0, 2),
+                ),
+              ],
+            ),
+            child: SelectableText(
+              message.text,
+              style: const TextStyle(
+                fontSize: 15,
+                height: 1.45,
+                color: AppColors.userText,
               ),
-            ],
-          ),
-          child: Text(
-            message.text,
-            style: const TextStyle(
-              fontSize: 15,
-              height: 1.45,
-              color: AppColors.userText,
             ),
           ),
         ),
       );
     }
-
-    final isCopied = _copiedMessageContent == message.text;
 
     return Padding(
       padding: const EdgeInsets.only(bottom: 16),
@@ -894,39 +907,40 @@ class _ChatScreenState extends State<ChatScreen> {
           Expanded(
             child: Align(
               alignment: Alignment.centerLeft,
-              child: Container(
-                margin: const EdgeInsets.only(right: 36),
-                padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
-                decoration: BoxDecoration(
-                  color: message.isError ? AppColors.errorBubble : AppColors.botBubble,
-                  borderRadius: BorderRadius.circular(18),
-                  border: message.isError
-                      ? Border.all(color: AppColors.errorBorder, width: 1)
-                      : null,
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.black.withValues(alpha: 0.04),
-                      blurRadius: 8,
-                      offset: const Offset(0, 2),
-                    ),
-                  ],
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    SelectableText(
-                      message.text,
-                      style: TextStyle(
-                        fontSize: 15,
-                        height: 1.5,
-                        color: message.isError ? AppColors.errorText : AppColors.botText,
+              child: GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onDoubleTap: () => _copyToClipboard(message.text),
+                child: Container(
+                  margin: const EdgeInsets.only(right: 36),
+                  padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
+                  decoration: BoxDecoration(
+                    color: message.isError ? AppColors.errorBubble : AppColors.botBubble,
+                    borderRadius: BorderRadius.circular(18),
+                    border: message.isError
+                        ? Border.all(color: AppColors.errorBorder, width: 1)
+                        : null,
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withValues(alpha: 0.04),
+                        blurRadius: 8,
+                        offset: const Offset(0, 2),
                       ),
-                    ),
+                    ],
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      SelectableText(
+                        message.text,
+                        style: TextStyle(
+                          fontSize: 15,
+                          height: 1.5,
+                          color: message.isError ? AppColors.errorText : AppColors.botText,
+                        ),
+                      ),
 
-
-                    // Copy action button
-                    if (!message.isError)
+                      // Copy action button
                       Padding(
                         padding: const EdgeInsets.only(top: 8),
                         child: Row(
@@ -961,7 +975,8 @@ class _ChatScreenState extends State<ChatScreen> {
                           ],
                         ),
                       ),
-                  ],
+                    ],
+                  ),
                 ),
               ),
             ),

@@ -1,7 +1,24 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
+
+/// Clean structured exception carrying a user-friendly message and technical detail for debugging.
+class ApiException implements Exception {
+  final String userMessage;
+  final String technicalDetail;
+  final int? statusCode;
+
+  const ApiException({
+    required this.userMessage,
+    required this.technicalDetail,
+    this.statusCode,
+  });
+
+  @override
+  String toString() => userMessage;
+}
 
 /// Matched Q&A episode citation from the backend RAG pipeline.
 class MatchedEpisode {
@@ -175,7 +192,6 @@ class ChatService {
       'query': cleanQuery,
       'history': trimmedHistory.map((m) => m.toHistoryMap()).toList(),
     });
-
     final uri = Uri.parse('$baseUrl/chat');
 
     try {
@@ -195,25 +211,74 @@ class ChatService {
         decoded = null;
       }
 
-      if (response.statusCode == 200 && decoded is Map<String, dynamic>) {
+      if (response.statusCode == 200 && decoded is Map<String, dynamic> && decoded['success'] != false) {
         final chatResponse = ChatResponse.fromJson(decoded);
         if (chatResponse.answer.trim().isEmpty) {
-          throw const HttpException('The spiritual guide returned an empty answer.');
+          throw const ApiException(
+            userMessage: 'Koi uttar prapt nahi hua. Kripya punah prayas karein.',
+            technicalDetail: 'Backend returned an empty answer field.',
+            statusCode: 200,
+          );
         }
         return chatResponse;
       } else {
-        String message = 'Server returned error (${response.statusCode})';
-        if (decoded is Map<String, dynamic> && decoded['detail'] != null) {
-          message = decoded['detail'].toString();
+        String userMessage = 'Kuch asuvidha hui. Kripya punah prayas karein.';
+        String technicalDetail = 'HTTP ${response.statusCode}: $responseBody';
+
+        if (decoded is Map<String, dynamic>) {
+          if (decoded['user_message'] != null && decoded['user_message'].toString().trim().isNotEmpty) {
+            userMessage = decoded['user_message'].toString().trim();
+          }
+          if (decoded['detail'] != null) {
+            technicalDetail = decoded['detail'].toString();
+          }
         }
-        throw HttpException(message);
+
+        // If backend didn't supply user_message, deduce a friendly message from status code / technical text
+        if (userMessage == 'Kuch asuvidha hui. Kripya punah prayas karein.') {
+          if (response.statusCode == 429 || technicalDetail.contains('429') || technicalDetail.contains('RESOURCE_EXHAUSTED')) {
+            userMessage = 'Server par anurodh ki seema samapt ho gayi hai. Kripya kuch samay baad punah prayas karein.';
+          } else if (response.statusCode == 502 || response.statusCode == 503 || response.statusCode == 504) {
+            userMessage = 'Server abhi restart ya vyast ho raha hai. Kripya thodi der baad punah prayas karein.';
+          }
+        }
+
+        debugPrint('[ChatService Error] status=${response.statusCode}, detail=$technicalDetail');
+        throw ApiException(
+          userMessage: userMessage,
+          technicalDetail: technicalDetail,
+          statusCode: response.statusCode,
+        );
       }
-    } on SocketException catch (_) {
-      throw const SocketException(
-        'Could not reach server. Please ensure the backend is running at https://ekantit-chat.onrender.com (or your LAN IP on physical devices).',
+    } on SocketException catch (e) {
+      debugPrint('[ChatService SocketException] ${e.message}');
+      throw const ApiException(
+        userMessage: 'Internet connection check karein ya kripya thodi der baad prayas karein.',
+        technicalDetail: 'SocketException: Could not connect to backend server.',
       );
-    } on TimeoutException {
-      throw TimeoutException('Request timed out after ${timeout.inSeconds} seconds. Please try again.');
+    } on TimeoutException catch (e) {
+      debugPrint('[ChatService TimeoutException] $e');
+      throw const ApiException(
+        userMessage: 'Jawab aane me samay lag raha hai. Kripya punah prayas karein.',
+        technicalDetail: 'TimeoutException: Request timed out.',
+      );
+    } catch (e) {
+      if (e is ApiException) rethrow;
+
+      final errStr = e.toString();
+      debugPrint('[ChatService ClientException/Error] $errStr');
+
+      String friendly = 'Kuch asuvidha hui. Kripya internet connection check karein aur punah prayas karein.';
+      if (errStr.contains('429') || errStr.contains('RESOURCE_EXHAUSTED')) {
+        friendly = 'Server par anurodh ki seema samapt ho gayi hai. Kripya kuch samay baad punah prayas karein.';
+      } else if (errStr.contains('Failed to fetch') || errStr.contains('ClientException')) {
+        friendly = 'Server se sampark nahi ho saka. Kripya thodi der baad punah prayas karein.';
+      }
+
+      throw ApiException(
+        userMessage: friendly,
+        technicalDetail: errStr,
+      );
     }
   }
 

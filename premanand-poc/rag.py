@@ -58,8 +58,7 @@ Latest Question: {query}
 """
 QUERY_REWRITE_PROMPT = QUERY_ANALYSIS_PROMPT
 
-SYSTEM_PROMPT = (
-    """You are helping someone by drawing on the teachings of
+SYSTEM_PROMPT = """You are helping someone by drawing on the teachings of
 Premanand Ji Maharaj, based on the Q&A excerpts provided below from
 his actual satsang sessions.
 
@@ -68,33 +67,23 @@ if none match their exact situation, identify the underlying spiritual
 principles Premanand Ji teaches (e.g. naam-jap, surrender, seeing
 God's grace, non-attachment) and apply them to the person's specific
 situation, in his tone and style (warm, direct, often using stories,
-Sanskrit/Hindi verses, and repeated emphasis on naam-jap).
+verses, and repeated emphasis on naam-jap).
 
-Respond in Hinglish (Hindi language written in Roman/English script,
-NOT Devanagari) — e.g. "Radhe-Radhe, dekho beta..." instead of
-"राधे-राधे, देखो बच्चा...". Keep the tone, warmth and style of the
-excerpts, just transliterate to Roman script. Do not invent facts about
-Premanand Ji himself. Ground your answer in the principles shown in the
-excerpts, adapted to the new situation.
-"""
-    # Strict grounding rules:
-    # - Quote a shloka, verse, scripture name or story ONLY if it appears in
-    #   the excerpts above. Never add quotes from your own memory.
-    # - Do not say things like "mere gurudev ne kaha" or "maine pichle satsang
-    #   me bataya" unless the excerpts actually say that.
-    # - If the excerpts don't cover the question well, say that briefly and
-    #   give only the general principles that do appear in them.
-    """
+Language and Script Matching:
+- Match the exact language and script of the user's question:
+  1. If the user asks in English: Respond in natural, warm, spiritually rich English (you can retain familiar devotional terms in quotes or brackets like 'Radha-Radha', 'naam-jap', 'bhakti').
+  2. If the user asks in Hindi (Devanagari script, e.g. "राधे-राधे, मैं क्या करूं?"): Respond in respectful, pure Hindi using Devanagari script (e.g. "राधे-राधे, देखो बेटा...").
+  3. If the user asks in Hinglish (Hindi written in Roman/Latin script, e.g. "Radhe-Radhe, mai kya karu?"): Respond in Hinglish (e.g. "Radhe-Radhe, dekho beta...").
+- Keep the tone, warmth and loving fatherly style of Maharaj Ji across all languages. Do not invent biographical facts about Premanand Ji himself.
+
 Excerpts:
 {context}
 
 Person's situation/question:
 {query}
 """
-)
 
-CONVERSATIONAL_SYSTEM_PROMPT = (
-    """You are helping someone by drawing on the teachings of
+CONVERSATIONAL_SYSTEM_PROMPT = """You are helping someone by drawing on the teachings of
 Premanand Ji Maharaj, based on the Q&A excerpts provided below from
 his actual satsang sessions.
 
@@ -103,23 +92,15 @@ if none match their exact situation, identify the underlying spiritual
 principles Premanand Ji teaches (e.g. naam-jap, surrender, seeing
 God's grace, non-attachment) and apply them to the person's specific
 situation, in his tone and style (warm, direct, often using stories,
-Sanskrit/Hindi verses, and repeated emphasis on naam-jap).
+verses, and repeated emphasis on naam-jap).
 
-Respond in Hinglish (Hindi language written in Roman/English script,
-NOT Devanagari) — e.g. "Radhe-Radhe, dekho beta..." instead of
-"राधे-राधे, देखो बच्चा...". Keep the tone, warmth and style of the
-excerpts, just transliterate to Roman script. Do not invent facts about
-Premanand Ji himself. Ground your answer in the principles shown in the
-excerpts, adapted to the new situation.
-"""
-    # Strict grounding rules:
-    # - Quote a shloka, verse, scripture name or story ONLY if it appears in
-    #   the excerpts above. Never add quotes from your own memory.
-    # - Do not say things like "mere gurudev ne kaha" or "maine pichle satsang
-    #   me bataya" unless the excerpts actually say that.
-    # - If the excerpts don't cover the question well, say that briefly and
-    #   give only the general principles that do appear in them.
-    """
+Language and Script Matching:
+- Match the exact language and script of the user's question:
+  1. If the user asks in English: Respond in natural, warm, spiritually rich English (you can retain familiar devotional terms in quotes or brackets like 'Radha-Radha', 'naam-jap', 'bhakti').
+  2. If the user asks in Hindi (Devanagari script, e.g. "राधे-राधे, मैं क्या करूं?"): Respond in respectful, pure Hindi using Devanagari script (e.g. "राधे-राधे, देखो बेटा...").
+  3. If the user asks in Hinglish (Hindi written in Roman/Latin script, e.g. "Radhe-Radhe, mai kya karu?"): Respond in Hinglish (e.g. "Radhe-Radhe, dekho beta...").
+- Keep the tone, warmth and loving fatherly style of Maharaj Ji across all languages. Do not invent biographical facts about Premanand Ji himself.
+
 Excerpts:
 {context}
 
@@ -128,7 +109,6 @@ Excerpts:
 Current Question:
 {query}
 """
-)
 
 
 def cosine_similarity(a, b):
@@ -147,14 +127,45 @@ def cosine_similarity(a, b):
     return dot / (norm_a * norm_b) if norm_a and norm_b else 0.0
 
 
-def with_retry(fn, label, max_retries=4, base_wait=5):
-    """Call fn(); retry with exponential backoff on 5xx (e.g. 503 overloaded)
-    and 429 (rate limit). Any other error is raised immediately."""
+class GeminiClientPool:
+    """Round-robin / failover pool of Gemini clients across multiple API keys."""
+    def __init__(self, keys: list[str]):
+        self.keys = [k.strip() for k in keys if k and k.strip()]
+        if not self.keys:
+            raise RuntimeError("No Gemini API keys provided to GeminiClientPool.")
+        self.clients = [genai.Client(api_key=k) for k in self.keys]
+        self.current_idx = 0
+        for c in self.clients:
+            c._pool = self
+
+    @property
+    def current(self) -> genai.Client:
+        return self.clients[self.current_idx % len(self.clients)]
+
+    def rotate(self, reason: str = "") -> genai.Client:
+        if len(self.clients) > 1:
+            self.current_idx = (self.current_idx + 1) % len(self.clients)
+            print(f"[ClientPool] {reason} -> Rotated to API key #{self.current_idx + 1}/{len(self.clients)}")
+            return self.current
+        return self.clients[0]
+
+    def __getattr__(self, name):
+        return getattr(self.current, name)
+
+
+def with_retry(fn, label, max_retries=4, base_wait=2, pool=None):
+    """Call fn(); retry with exponential backoff on 5xx and 429.
+    If a client pool is provided and 429 occurs, rotate key immediately!"""
     for attempt in range(1, max_retries + 1):
         try:
             return fn()
         except (errors.ServerError, errors.ClientError) as e:
             code = getattr(e, "code", None)
+            err_str = str(e)
+            is_quota = code == 429 or "RESOURCE_EXHAUSTED" in err_str or "quota" in err_str.lower()
+            if is_quota and pool and len(pool.clients) > 1 and attempt < max_retries:
+                pool.rotate("429 Resource Exhausted")
+                continue
             retryable = isinstance(e, errors.ServerError) or code == 429
             if not retryable or attempt == max_retries:
                 raise
@@ -166,6 +177,7 @@ def with_retry(fn, label, max_retries=4, base_wait=5):
 
 def generate_answer(client, prompt):
     """Try CHAT_MODEL first (with retries), then each fallback model."""
+    pool = getattr(client, "_pool", client if isinstance(client, GeminiClientPool) else None)
     last_err = None
     for model in [CHAT_MODEL] + FALLBACK_MODELS:
         try:
@@ -175,6 +187,7 @@ def generate_answer(client, prompt):
                     contents=[prompt],
                 ),
                 label=model,
+                pool=pool,
             )
             return (response.text or "").strip()
         except errors.ServerError as e:
@@ -409,6 +422,7 @@ def analyze_and_rewrite_query(client, query: str, history: list = None) -> tuple
         history=formatted_history, query=clean_query
     )
 
+    pool = getattr(client, "_pool", client if isinstance(client, GeminiClientPool) else None)
     models_to_try = [REWRITE_MODEL] + REWRITE_FALLBACK_MODELS
     for model in models_to_try:
         try:
@@ -425,6 +439,7 @@ def analyze_and_rewrite_query(client, query: str, history: list = None) -> tuple
                 label=f"query_analysis_{model}",
                 max_retries=2,
                 base_wait=2,
+                pool=pool,
             )
             raw_text = (response.text or "").strip()
             data = json.loads(raw_text)
@@ -447,12 +462,14 @@ def rewrite_query(client, query: str, history: list = None) -> str:
 
 def retrieve_top_k(client, query: str, cached_pairs: list, k: int = TOP_K):
     """Stage 2: Embed standalone retrieval query and get top-k cosine similarity matches."""
+    pool = getattr(client, "_pool", client if isinstance(client, GeminiClientPool) else None)
     query_embedding = with_retry(
         lambda: client.models.embed_content(
             model=EMBED_MODEL,
             contents=query,
         ),
         label="embed query",
+        pool=pool,
     ).embeddings[0].values
 
     # Ultra-fast vectorized similarity if numpy vectors are present
