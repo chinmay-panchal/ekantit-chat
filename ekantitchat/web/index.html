@@ -11,25 +11,141 @@
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black">
   <meta name="apple-mobile-web-app-title" content="Ekantit Chat">
+  <meta name="theme-color" content="#B45309">
   <link rel="apple-touch-icon" href="icons/Icon-192.png">
 
   <!-- Favicon -->
-  <link rel="icon" type="image/png" href="favicon.png"/>
+  <link rel="icon" type="image/svg+xml" href="favicon.svg">
+  <link rel="icon" type="image/png" sizes="64x64" href="favicon.png">
+  <link rel="shortcut icon" href="favicon.ico">
 
   <title>Ekantit Chat</title>
   <link rel="manifest" href="manifest.json">
+
+  <style>
+    #update-banner {
+      display: none;
+      position: fixed;
+      bottom: 24px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: #2a1f16;
+      color: #fff;
+      padding: 10px 18px;
+      border-radius: 30px;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      font-size: 14px;
+      font-weight: 500;
+      z-index: 999999;
+      box-shadow: 0 6px 24px rgba(0,0,0,0.3);
+      align-items: center;
+      gap: 12px;
+      white-space: nowrap;
+      border: 1px solid rgba(255,255,255,0.15);
+      animation: bannerSlideUp 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+    #update-banner.visible {
+      display: flex;
+    }
+    #update-banner span { opacity: 0.92; }
+    #update-banner button {
+      background: #c8793a;
+      color: white;
+      border: none;
+      border-radius: 18px;
+      padding: 6px 14px;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.15s ease;
+    }
+    #update-banner button:hover {
+      background: #b2682e;
+    }
+    @keyframes bannerSlideUp {
+      from { transform: translate(-50%, 20px); opacity: 0; }
+      to { transform: translate(-50%, 0); opacity: 1; }
+    }
+  </style>
+
   <script>
-    // Ensure any stale service worker is immediately cleared on load
+    function showUpdateBanner() {
+      var banner = document.getElementById('update-banner');
+      if (banner) banner.classList.add('visible');
+    }
+
+    async function applyUpdate() {
+      try {
+        if ('caches' in window) {
+          var keys = await caches.keys();
+          await Promise.all(keys.map(function(k) { return caches.delete(k); }));
+        }
+        if ('serviceWorker' in navigator) {
+          var regs = await navigator.serviceWorker.getRegistrations();
+          await Promise.all(regs.map(function(r) { return r.unregister(); }));
+        }
+      } catch (e) {}
+      window.location.reload(true);
+    }
+
+    // Check version.json periodically and on startup to detect new deployments
+    async function checkAppVersion() {
+      try {
+        var res = await fetch('version.json?_t=' + Date.now(), { cache: 'no-store' });
+        if (res.ok) {
+          var data = await res.json();
+          var serverVersion = (data.build_number || data.version) + '_' + (data.app_name || '');
+          var savedVersion = localStorage.getItem('ekantit_cached_version');
+          if (savedVersion && savedVersion !== serverVersion) {
+            showUpdateBanner();
+          } else {
+            localStorage.setItem('ekantit_cached_version', serverVersion);
+          }
+        }
+      } catch (e) {}
+    }
+
+    // Initial check
+    checkAppVersion();
+    // Re-check every 5 minutes in background
+    setInterval(checkAppVersion, 5 * 60 * 1000);
+
+    // Listen for service worker updates
     if ('serviceWorker' in navigator) {
-      navigator.serviceWorker.getRegistrations().then(function(registrations) {
-        for (var registration of registrations) {
-          registration.unregister();
+      navigator.serviceWorker.getRegistrations().then(function(regs) {
+        for (var reg of regs) {
+          reg.update();
+          if (reg.waiting) showUpdateBanner();
+          reg.addEventListener('updatefound', function() {
+            var newWorker = reg.installing;
+            if (newWorker) {
+              newWorker.addEventListener('statechange', function() {
+                if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
+                  showUpdateBanner();
+                }
+              });
+            }
+          });
+        }
+      });
+
+      var isRefreshing = false;
+      navigator.serviceWorker.addEventListener('controllerchange', function() {
+        if (!isRefreshing) {
+          isRefreshing = true;
+          window.location.reload();
         }
       });
     }
   </script>
 </head>
 <body>
+  <!-- Update notification banner -->
+  <div id="update-banner">
+    <span>✨ नया अपडेट उपलब्ध है</span>
+    <button onclick="applyUpdate()">Refresh करें</button>
+  </div>
+
   <script src="flutter_bootstrap.js" async></script>
 </body>
 </html>
