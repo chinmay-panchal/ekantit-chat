@@ -1,8 +1,10 @@
 import 'dart:async';
 import 'dart:io';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'app_theme.dart';
+import 'auth_service.dart';
 import 'chat_history_service.dart';
 import 'chat_service.dart';
 import 'chat_session.dart';
@@ -44,6 +46,15 @@ class _ChatScreenState extends State<ChatScreen> {
   bool _isLoadingHistory = true;
   String? _copiedMessageContent;
 
+  // Auth state
+  User? _currentUser;
+  int _freeQuestionsUsed = 0; // questions asked before sign-in
+  static const int _freeQuestionLimit = 1;
+
+  /// True when the user is NOT signed in with a real (Google) account.
+  /// Anonymous sign-ins (used by ChatHistoryService internally) are treated as guests.
+  bool get _isGuest => _currentUser == null || (_currentUser?.isAnonymous ?? true);
+
   // Spiritual prompt suggestions for empty state
   static const List<String> _suggestedPrompts = [
     'मन को शांत कैसे करें?',
@@ -57,6 +68,15 @@ class _ChatScreenState extends State<ChatScreen> {
     super.initState();
     _loadHistorySessions();
     _checkBackendHealth();
+    // Listen for auth state changes
+    AuthService.authStateChanges.listen((user) {
+      if (mounted) {
+        setState(() {
+          _currentUser = user;
+        });
+      }
+    });
+    _currentUser = AuthService.currentUser;
   }
 
   @override
@@ -191,11 +211,50 @@ class _ChatScreenState extends State<ChatScreen> {
     await _sendMessage();
   }
 
+  /// Shows the Google sign-in bottom sheet.
+  Future<void> _showSignInSheet({bool afterFreeQuestion = false}) async {
+    await showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) => _SignInSheet(
+        afterFreeQuestion: afterFreeQuestion,
+        onSignIn: () async {
+          final user = await AuthService.signInWithGoogle();
+          if (ctx.mounted) Navigator.of(ctx).pop();
+          if (user != null && mounted) {
+            setState(() {
+              _currentUser = user;
+            });
+            // If there's a pending question in the text field, send it now
+            if (_controller.text.trim().isNotEmpty) {
+              await _sendMessage();
+            }
+          }
+        },
+        onSkip: afterFreeQuestion
+            ? null
+            : () => Navigator.of(ctx).pop(),
+      ),
+    );
+  }
+
   Future<void> _sendMessage() async {
     final text = _controller.text.trim();
     if (text.isEmpty || _isLoading) return;
 
+    // Auth gate: after free question limit, require sign-in
+    if (_isGuest && _freeQuestionsUsed >= _freeQuestionLimit) {
+      // Keep the typed text, show sign-in sheet
+      await _showSignInSheet(afterFreeQuestion: true);
+      return;
+    }
+
     _controller.clear();
+    // Count free questions for guests
+    if (_isGuest) {
+      _freeQuestionsUsed++;
+    }
     final userMessage = ChatMessage.user(text);
     setState(() {
       _messages.add(userMessage);
@@ -366,7 +425,72 @@ class _ChatScreenState extends State<ChatScreen> {
           ),
           const Spacer(),
 
-
+          // Sign-in button or user avatar
+          if (_isGuest)
+            GestureDetector(
+              onTap: () => _showSignInSheet(),
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+                decoration: BoxDecoration(
+                  color: AppColors.accent,
+                  borderRadius: BorderRadius.circular(20),
+                ),
+                child: const Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(Icons.login_rounded, size: 14, color: Colors.white),
+                    SizedBox(width: 6),
+                    Text(
+                      'Sign In',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            )
+          else
+            GestureDetector(
+              onTap: () {
+                _loadHistorySessions();
+                // Open drawer via scaffold key trick using Builder below
+              },
+              child: Builder(
+                builder: (ctx) => GestureDetector(
+                  onTap: () {
+                    _loadHistorySessions();
+                    Scaffold.of(ctx).openEndDrawer();
+                  },
+                  child: Row(
+                    children: [
+                      CircleAvatar(
+                        radius: 16,
+                        backgroundColor: AppColors.botBubble,
+                        backgroundImage: AuthService.photoUrl != null
+                            ? NetworkImage(AuthService.photoUrl!)
+                            : null,
+                        child: AuthService.photoUrl == null
+                            ? Text(
+                                AuthService.firstName.isNotEmpty
+                                    ? AuthService.firstName[0].toUpperCase()
+                                    : 'S',
+                                style: const TextStyle(
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.bold,
+                                  color: AppColors.accentStrong,
+                                ),
+                              )
+                            : null,
+                      ),
+                      const SizedBox(width: 8),
+                    ],
+                  ),
+                ),
+              ),
+            ),
 
           // History button that opens the drawer
           Builder(
@@ -696,6 +820,106 @@ class _ChatScreenState extends State<ChatScreen> {
                 ),
               ),
 
+          // Sign-in / Sign-out section at bottom of drawer
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+            decoration: const BoxDecoration(
+              border: Border(top: BorderSide(color: AppColors.headerBorder, width: 1)),
+            ),
+            child: _isGuest
+                ? InkWell(
+                    onTap: () async {
+                      Navigator.of(context).pop();
+                      await _showSignInSheet();
+                    },
+                    borderRadius: BorderRadius.circular(10),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(vertical: 10),
+                      decoration: BoxDecoration(
+                        color: AppColors.accent.withValues(alpha: 0.08),
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          const Icon(Icons.login_rounded, size: 16, color: AppColors.accentStrong),
+                          const SizedBox(width: 8),
+                          Text(
+                            'Sign in to save history',
+                            style: TextStyle(
+                              fontSize: 13,
+                              color: AppColors.accentStrong,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  )
+                : Row(
+                    children: [
+                      CircleAvatar(
+                        radius: 16,
+                        backgroundColor: AppColors.botBubble,
+                        backgroundImage: AuthService.photoUrl != null
+                            ? NetworkImage(AuthService.photoUrl!)
+                            : null,
+                        child: AuthService.photoUrl == null
+                            ? Text(
+                                AuthService.firstName.isNotEmpty
+                                    ? AuthService.firstName[0].toUpperCase()
+                                    : 'S',
+                                style: const TextStyle(
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.bold,
+                                  color: AppColors.accentStrong,
+                                ),
+                              )
+                            : null,
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text(
+                              AuthService.displayName,
+                              style: const TextStyle(
+                                fontSize: 13,
+                                fontWeight: FontWeight.w600,
+                                color: AppColors.botText,
+                              ),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                            Text(
+                              _currentUser!.email ?? '',
+                              style: const TextStyle(
+                                fontSize: 11,
+                                color: AppColors.mutedText,
+                              ),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ],
+                        ),
+                      ),
+                      InkWell(
+                        onTap: () async {
+                          await AuthService.signOut();
+                          if (mounted) setState(() => _currentUser = null);
+                          if (context.mounted) Navigator.of(context).pop();
+                        },
+                        borderRadius: BorderRadius.circular(8),
+                        child: const Padding(
+                          padding: EdgeInsets.all(6),
+                          child: Icon(Icons.logout_rounded, size: 18, color: AppColors.mutedText),
+                        ),
+                      ),
+                    ],
+                  ),
+          ),
 
           ],
         ),
@@ -1157,3 +1381,164 @@ class _TypingDotsState extends State<_TypingDots>
     );
   }
 }
+
+// ─────────────────────────────────────────────
+// Google Sign-In Bottom Sheet
+// ─────────────────────────────────────────────
+
+class _SignInSheet extends StatelessWidget {
+  final bool afterFreeQuestion;
+  final VoidCallback onSignIn;
+  final VoidCallback? onSkip;
+
+  const _SignInSheet({
+    required this.afterFreeQuestion,
+    required this.onSignIn,
+    this.onSkip,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(28),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.12),
+            blurRadius: 32,
+            offset: const Offset(0, -4),
+          ),
+        ],
+      ),
+      padding: const EdgeInsets.fromLTRB(28, 28, 28, 36),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          // Drag handle
+          Container(
+            width: 38,
+            height: 4,
+            decoration: BoxDecoration(
+              color: AppColors.border,
+              borderRadius: BorderRadius.circular(2),
+            ),
+          ),
+          const SizedBox(height: 24),
+
+          // Lotus / spiritual icon
+          Container(
+            width: 64,
+            height: 64,
+            decoration: BoxDecoration(
+              color: AppColors.botBubble,
+              shape: BoxShape.circle,
+              border: Border.all(color: AppColors.avatarRing, width: 2),
+              boxShadow: [
+                BoxShadow(
+                  color: AppColors.avatarRing.withValues(alpha: 0.3),
+                  blurRadius: 16,
+                  spreadRadius: 2,
+                ),
+              ],
+            ),
+            child: const Icon(
+              Icons.filter_vintage_outlined,
+              color: AppColors.accentStrong,
+              size: 30,
+            ),
+          ),
+          const SizedBox(height: 18),
+
+          Text(
+            afterFreeQuestion
+                ? 'आगे जारी रखने के लिए साइन इन करें'
+                : 'अपनी यात्रा सहेजें',
+            style: const TextStyle(
+              fontSize: 20,
+              fontWeight: FontWeight.w700,
+              color: AppColors.botText,
+            ),
+            textAlign: TextAlign.center,
+          ),
+          const SizedBox(height: 10),
+
+          Text(
+            afterFreeQuestion
+                ? 'आपने 1 प्रश्न पूछा। अपनी वार्तालाप इतिहास सहेजने और असीमित प्रश्न पूछने के लिए Google से साइन इन करें।'
+                : 'Sign in to save your conversations and ask unlimited questions.',
+            style: const TextStyle(
+              fontSize: 14,
+              height: 1.5,
+              color: AppColors.mutedText,
+            ),
+            textAlign: TextAlign.center,
+          ),
+          const SizedBox(height: 28),
+
+          // Google Sign-In button
+          GestureDetector(
+            onTap: onSignIn,
+            child: Container(
+              width: double.infinity,
+              height: 52,
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(26),
+                border: Border.all(color: AppColors.border, width: 1.5),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withValues(alpha: 0.06),
+                    blurRadius: 12,
+                    offset: const Offset(0, 2),
+                  ),
+                ],
+              ),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  // Google logo image
+                  Image.asset(
+                    'assets/images/google_logo.png',
+                    width: 22,
+                    height: 22,
+                  ),
+                  const SizedBox(width: 12),
+                  const Text(
+                    'Google से साइन इन करें',
+                    style: TextStyle(
+                      fontSize: 15,
+                      fontWeight: FontWeight.w600,
+                      color: AppColors.botText,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+
+          // Skip option (only shown when not forced)
+          if (onSkip != null) ...[
+            const SizedBox(height: 14),
+            GestureDetector(
+              onTap: onSkip,
+              child: const Text(
+                'अभी नहीं  •  Skip for now',
+                style: TextStyle(
+                  fontSize: 13,
+                  color: AppColors.mutedText,
+                  decoration: TextDecoration.underline,
+                ),
+              ),
+            ),
+          ],
+
+          const SizedBox(height: 8),
+        ],
+      ),
+    );
+  }
+}
+
+

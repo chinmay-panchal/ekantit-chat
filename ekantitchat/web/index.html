@@ -48,7 +48,7 @@
       display: flex;
     }
     #update-banner span { opacity: 0.92; }
-    #update-banner button {
+    #update-banner button.refresh-btn {
       background: #c8793a;
       color: white;
       border: none;
@@ -59,8 +59,22 @@
       cursor: pointer;
       transition: background 0.15s ease;
     }
-    #update-banner button:hover {
+    #update-banner button.refresh-btn:hover {
       background: #b2682e;
+    }
+    #update-banner .close-btn {
+      background: transparent;
+      border: none;
+      color: rgba(255,255,255,0.6);
+      font-size: 18px;
+      line-height: 1;
+      cursor: pointer;
+      padding: 0 4px;
+      display: flex;
+      align-items: center;
+    }
+    #update-banner .close-btn:hover {
+      color: #fff;
     }
     @keyframes bannerSlideUp {
       from { transform: translate(-50%, 20px); opacity: 0; }
@@ -69,13 +83,23 @@
   </style>
 
   <script>
+    var currentServerVersion = null;
+
     function showUpdateBanner() {
       var banner = document.getElementById('update-banner');
       if (banner) banner.classList.add('visible');
     }
 
+    function dismissUpdateBanner() {
+      var banner = document.getElementById('update-banner');
+      if (banner) banner.classList.remove('visible');
+    }
+
     async function applyUpdate() {
       try {
+        if (currentServerVersion) {
+          localStorage.setItem('ekantit_cached_version', currentServerVersion);
+        }
         if ('caches' in window) {
           var keys = await caches.keys();
           await Promise.all(keys.map(function(k) { return caches.delete(k); }));
@@ -85,65 +109,57 @@
           await Promise.all(regs.map(function(r) { return r.unregister(); }));
         }
       } catch (e) {}
-      window.location.reload(true);
+      dismissUpdateBanner();
+      window.location.reload();
     }
 
-    // Check version.json periodically and on startup to detect new deployments
-    async function checkAppVersion() {
+    // Proactively unregister any stale service workers to prevent stuck caching
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.getRegistrations().then(function(regs) {
+        for (var reg of regs) {
+          reg.unregister();
+        }
+      });
+    }
+
+    // Check version.json periodically to detect deployments
+    async function checkAppVersion(isInitial) {
       try {
         var res = await fetch('version.json?_t=' + Date.now(), { cache: 'no-store' });
         if (res.ok) {
           var data = await res.json();
-          var serverVersion = (data.build_number || data.version) + '_' + (data.app_name || '');
+          currentServerVersion = (data.build_number || data.version) + '_' + (data.app_name || '');
           var savedVersion = localStorage.getItem('ekantit_cached_version');
-          if (savedVersion && savedVersion !== serverVersion) {
+
+          if (isInitial || !savedVersion) {
+            // Fresh load or reload: sync version, do not prompt the user
+            localStorage.setItem('ekantit_cached_version', currentServerVersion);
+            return;
+          }
+
+          // Background poll while tab remained open: show banner if version changed
+          if (savedVersion !== currentServerVersion) {
             showUpdateBanner();
-          } else {
-            localStorage.setItem('ekantit_cached_version', serverVersion);
           }
         }
       } catch (e) {}
     }
 
-    // Initial check
-    checkAppVersion();
-    // Re-check every 5 minutes in background
-    setInterval(checkAppVersion, 5 * 60 * 1000);
+    // Initial check on load (syncs current version without showing banner)
+    checkAppVersion(true);
 
-    // Listen for service worker updates
-    if ('serviceWorker' in navigator) {
-      navigator.serviceWorker.getRegistrations().then(function(regs) {
-        for (var reg of regs) {
-          reg.update();
-          if (reg.waiting) showUpdateBanner();
-          reg.addEventListener('updatefound', function() {
-            var newWorker = reg.installing;
-            if (newWorker) {
-              newWorker.addEventListener('statechange', function() {
-                if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
-                  showUpdateBanner();
-                }
-              });
-            }
-          });
-        }
-      });
-
-      var isRefreshing = false;
-      navigator.serviceWorker.addEventListener('controllerchange', function() {
-        if (!isRefreshing) {
-          isRefreshing = true;
-          window.location.reload();
-        }
-      });
-    }
+    // Background polling every 5 minutes while user has tab open
+    setInterval(function() {
+      checkAppVersion(false);
+    }, 5 * 60 * 1000);
   </script>
 </head>
 <body>
   <!-- Update notification banner -->
   <div id="update-banner">
     <span>✨ नया अपडेट उपलब्ध है</span>
-    <button onclick="applyUpdate()">Refresh करें</button>
+    <button class="refresh-btn" onclick="applyUpdate()">Refresh करें</button>
+    <button class="close-btn" onclick="dismissUpdateBanner()" title="Close">&times;</button>
   </div>
 
   <script src="flutter_bootstrap.js" async></script>
