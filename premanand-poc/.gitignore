@@ -1,0 +1,17 @@
+.venv/
+venv/
+__pycache__/
+*.pyc
+.env
+.env.*
+*.wav
+*.mp3
+episodes/
+transcripts*.jsonl
+embeddings_cache.jsonl
+embeddings_cache.json
+skipped_turns.log
+failed_episodes.jsonl
+reference.wav
+test_clip*.wav
+premanand_reference.npy
